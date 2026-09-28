@@ -1,4 +1,4 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+Market/OS is a Next.js equity research terminal. Search by ticker or company, import Yahoo Finance price history, and open SEC EDGAR filings.
 
 ## Getting Started
 
@@ -19,6 +19,12 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+
+## Data sources
+
+- Price history and symbol search use Yahoo Finance endpoints. Yahoo Finance does not publish this chart endpoint as a stable public API, so availability and rate limits may change.
+- Company filings come from the SEC EDGAR submissions API and open on sec.gov. Set `SEC_USER_AGENT` in the deployment environment to a descriptive app name and a real contact email, for example `MarketOS research terminal your-name@your-domain.com`.
+- Choose a ticker, date range, and interval in the terminal. Imported history can be exported as CSV.
 
 ## Learn More
 
