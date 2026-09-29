@@ -1,8 +1,10 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import PriceChart from "./PriceChart";
 
-type SymbolResult = { symbol: string; name: string; exchange: string };
+type SymbolResult = { symbol: string; name: string; exchange: string; country?: string };
 type PriceRow = {
   time: string;
   open: number | null;
@@ -19,15 +21,32 @@ type Filing = {
   url: string;
   indexUrl: string;
 };
+type ReportSource = { name: string; url: string };
+type ProfileOfficer = { name: string; title: string; age: number | null; fiscalYear: number | null; totalPay: number | null };
+type ProfileHolder = { name: string; percent: number | null; shares: number | null; reportDate: string | null };
+type CompanyProfile = {
+  symbol: string;
+  asOf: string;
+  source: string;
+  profile: { name: string; country: string | null; sector: string | null; industry: string | null; description: string | null; founded: string | null; employees: number | null; website: string | null; headquarters: string | null; officers: ProfileOfficer[] };
+  growth: { revenueGrowth: number | null; earningsGrowth: number | null; quarterlyEarningsGrowth: number | null; revenue: number | null; ebitda: number | null; profitMargin: number | null; returnOnEquity: number | null; revenueCurrency: string | null; mostRecentQuarter: string | null };
+  ownership: { sharesOutstanding: number | null; floatShares: number | null; insiderPercent: number | null; institutionPercent: number | null; institutionsCount: number | null; holders: ProfileHolder[] };
+  marketCap: number | null;
+};
 type History = {
   symbol: string;
   name: string;
   currency: string;
   exchange: string;
+  country: string;
   rows: PriceRow[];
 };
 const isoDay = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+const countryCode = (value = "") => {
+  const aliases: Record<string, string> = { "united states": "US", "united states of america": "US", "united kingdom": "GB", "great britain": "GB", india: "IN", canada: "CA", australia: "AU", japan: "JP", germany: "DE", france: "FR", netherlands: "NL", switzerland: "CH" };
+  return aliases[value.trim().toLowerCase()] ?? (/^[A-Z]{2}$/.test(value) ? value.toUpperCase() : "");
+};
 const dateDaysAgo = (days: number) => {
   const date = new Date();
   date.setDate(date.getDate() - days);
@@ -42,16 +61,22 @@ const money = (value: number | null | undefined, currency = "USD") =>
         maximumFractionDigits: 2,
       }).format(value);
 
-export default function Terminal() {
+export default function Terminal({ initialSymbol = "AAPL", initialStart, initialEnd, initialInterval }: { initialSymbol?: string; initialStart?: string; initialEnd?: string; initialInterval?: string }) {
   const [query, setQuery] = useState("");
   const [symbols, setSymbols] = useState<SymbolResult[]>([]);
   const [searching, setSearching] = useState(false);
-  const [symbol, setSymbol] = useState("AAPL");
-  const [name, setName] = useState("Apple Inc.");
+  const [symbol, setSymbol] = useState(initialSymbol);
+  const [name, setName] = useState(initialSymbol === "AAPL" ? "Apple Inc." : initialSymbol);
   const [exchange, setExchange] = useState("NASDAQ");
-  const [start, setStart] = useState(dateDaysAgo(365));
-  const [end, setEnd] = useState(isoDay(new Date()));
-  const [interval, setInterval] = useState("1d");
+  const [country, setCountry] = useState("");
+  const [reportSources, setReportSources] = useState<ReportSource[]>([]);
+  const [profile, setProfile] = useState<CompanyProfile | null>(null);
+  const [loadingProfile, setLoadingProfile] = useState(false);
+  const [profileError, setProfileError] = useState("");
+  const profileRequestId = useRef(0);
+  const [start, setStart] = useState(initialStart && /^\d{4}-\d{2}-\d{2}$/.test(initialStart) ? initialStart : dateDaysAgo(365));
+  const [end, setEnd] = useState(initialEnd && /^\d{4}-\d{2}-\d{2}$/.test(initialEnd) ? initialEnd : isoDay(new Date()));
+  const [interval, setInterval] = useState(initialInterval && ["1m", "2m", "5m", "15m", "30m", "60m", "1d", "1wk", "1mo"].includes(initialInterval) ? initialInterval : "1d");
   const [history, setHistory] = useState<History | null>(null);
   const [filings, setFilings] = useState<Filing[]>([]);
   const [company, setCompany] = useState("");
@@ -63,14 +88,10 @@ export default function Terminal() {
 
   useEffect(() => {
     const term = query.trim();
-    if (term.length < 1) {
-      setSymbols([]);
-      setSearching(false);
-      return;
-    }
+    if (term.length < 1) return;
     const controller = new AbortController();
-    setSearching(true);
     const timer = setTimeout(async () => {
+      setSearching(true);
       try {
         const response = await fetch(
           `/api/market/search?q=${encodeURIComponent(term)}`,
@@ -90,7 +111,7 @@ export default function Terminal() {
     };
   }, [query]);
 
-  async function loadHistory(ticker = symbol) {
+  async function loadHistory(ticker = symbol, countryHint = country, companyHint = name) {
     setLoadingHistory(true);
     setError("");
     try {
@@ -107,6 +128,10 @@ export default function Terminal() {
       setHistory(data);
       setName(data.name);
       setExchange(data.exchange ?? exchange);
+      if (data.country) {
+        setCountry(data.country);
+        if (data.country !== countryCode(countryHint)) void loadFilings(ticker, data.country, data.name || companyHint);
+      }
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -119,18 +144,39 @@ export default function Terminal() {
     }
   }
 
-  async function loadFilings(ticker = symbol) {
+  async function loadProfile(ticker = symbol) {
+    const requestId = ++profileRequestId.current;
+    setLoadingProfile(true);
+    setProfile(null);
+    setProfileError("");
+    try {
+      const response = await fetch(`/api/company/profile?symbol=${encodeURIComponent(ticker)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Unable to load company profile.");
+      if (requestId === profileRequestId.current) setProfile(data as CompanyProfile);
+    } catch (cause) {
+      if (requestId === profileRequestId.current) {
+        setProfile(null);
+        setProfileError(cause instanceof Error ? cause.message : "Unable to load company profile.");
+      }
+    } finally {
+      if (requestId === profileRequestId.current) setLoadingProfile(false);
+    }
+  }
+
+  async function loadFilings(ticker = symbol, countryCode = country, companyName = name) {
     setLoadingFilings(true);
     setFilingError("");
     try {
       const response = await fetch(
-        `/api/sec?ticker=${encodeURIComponent(ticker)}`,
+        `/api/reports?ticker=${encodeURIComponent(ticker)}&country=${encodeURIComponent(countryCode)}&company=${encodeURIComponent(companyName)}`,
       );
       const data = await response.json();
       if (!response.ok)
         throw new Error(data.error ?? "Unable to load SEC filings.");
       setFilings(data.filings ?? []);
-      setCompany(data.company ?? "");
+      setCompany(data.company ?? companyName);
+      setReportSources(data.sources ?? []);
     } catch (cause) {
       setFilingError(
         cause instanceof Error ? cause.message : "Unable to load SEC filings.",
@@ -146,10 +192,13 @@ export default function Terminal() {
     setSymbol(ticker);
     setName(item.name);
     setExchange(item.exchange);
+    const selectedCountry = countryCode(item.country);
+    setCountry(selectedCountry);
     setQuery("");
     setSymbols([]);
-    void loadHistory(ticker);
-    void loadFilings(ticker);
+    void loadHistory(ticker, selectedCountry, item.name);
+    void loadProfile(ticker);
+    if (selectedCountry) void loadFilings(ticker, selectedCountry, item.name);
   }
   function searchSubmit(event: FormEvent) {
     event.preventDefault();
@@ -162,6 +211,7 @@ export default function Terminal() {
         symbol: query.trim().toUpperCase(),
         name: query.trim().toUpperCase(),
         exchange: "",
+        country: "",
       });
   }
   function applyPreset(preset: string) {
@@ -178,21 +228,19 @@ export default function Terminal() {
     setInterval(days <= 6 ? "15m" : days <= 180 ? "1d" : "1wk");
   }
   const values = history?.rows.map((row) => row.close) ?? [];
-  const chart = useMemo(() => {
-    if (!values.length) return "";
-    const min = Math.min(...values),
-      max = Math.max(...values),
-      spread = max - min || 1;
-    return values
-      .map(
-        (value, i) =>
-          `${i ? "L" : "M"}${(i / (values.length - 1 || 1)) * 1000},${210 - ((value - min) / spread) * 185}`,
-      )
-      .join(" ");
-  }, [values]);
   const first = values[0],
     last = values.at(-1),
     delta = first != null && last != null ? last - first : null;
+  const periodHigh = history?.rows.length
+    ? Math.max(...history.rows.map((row) => row.high ?? row.close))
+    : null;
+  const periodLow = history?.rows.length
+    ? Math.min(...history.rows.map((row) => row.low ?? row.close))
+    : null;
+  const changePercent = delta != null && first
+    ? (delta / first) * 100
+    : null;
+  const latestRow = history?.rows.at(-1);
   const visibleFilings =
     activeTab === "ALL"
       ? filings
@@ -218,10 +266,13 @@ export default function Terminal() {
   };
 
   useEffect(() => {
-    void loadHistory("AAPL");
-    void loadFilings("AAPL"); // initial import
+    const timer = setTimeout(() => {
+      void loadHistory(initialSymbol, "", initialSymbol);
+      void loadProfile(initialSymbol);
+    }, 0);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [initialSymbol]);
 
   return (
     <main className="terminal-shell">
@@ -238,6 +289,10 @@ export default function Terminal() {
           ON-DEMAND DATA WORKSPACE{" "}
           <span className="status-time">YAHOO FINANCE · SEC EDGAR</span>
         </div>
+        <nav className="site-nav" aria-label="Main navigation">
+          <Link className="nav-link active" href={`/?${new URLSearchParams({ symbol, start, end, interval }).toString()}`} aria-current="page">TERMINAL</Link>
+          <Link className="nav-link" href={`/analytics?${new URLSearchParams({ symbol, start, end, interval }).toString()}`} transitionTypes={["nav-forward"]}>ANALYTICS</Link>
+        </nav>
         <div className="top-actions">
           <span className="top-action">
             ⌘ K <span>SEARCH</span>
@@ -465,69 +520,12 @@ export default function Terminal() {
               </div>
               <div className="main-chart">
                 {history?.rows.length ? (
-                  <>
-                    <div className="chart-gridlines">
-                      <span>
-                        {money(Math.max(...values), history.currency)}
-                      </span>
-                      <span>
-                        {money(
-                          (Math.max(...values) + Math.min(...values)) / 2,
-                          history.currency,
-                        )}
-                      </span>
-                      <span>
-                        {money(Math.min(...values), history.currency)}
-                      </span>
-                    </div>
-                    <svg
-                      viewBox="0 0 1000 230"
-                      preserveAspectRatio="none"
-                      role="img"
-                      aria-label={`${symbol} historical price chart`}
-                    >
-                      <defs>
-                        <linearGradient
-                          id="history-fill"
-                          x1="0"
-                          y1="0"
-                          x2="0"
-                          y2="1"
-                        >
-                          <stop
-                            offset="0%"
-                            stopColor="#39d78a"
-                            stopOpacity=".22"
-                          />
-                          <stop
-                            offset="100%"
-                            stopColor="#39d78a"
-                            stopOpacity="0"
-                          />
-                        </linearGradient>
-                      </defs>
-                      <path
-                        d={`${chart} L1000,230 L0,230 Z`}
-                        fill="url(#history-fill)"
-                      />
-                      <path
-                        d={chart}
-                        fill="none"
-                        stroke="#39d78a"
-                        strokeWidth="2.4"
-                        vectorEffect="non-scaling-stroke"
-                      />
-                    </svg>
-                    <div className="chart-axis">
-                      <span>{history.rows[0].time.slice(0, 10)}</span>
-                      <span>
-                        {history.rows[
-                          Math.floor(history.rows.length / 2)
-                        ]?.time.slice(0, 10)}
-                      </span>
-                      <span>{history.rows.at(-1)?.time.slice(0, 10)}</span>
-                    </div>
-                  </>
+                  <PriceChart
+                    rows={history.rows}
+                    currency={history.currency}
+                    symbol={symbol}
+                    formatMoney={money}
+                  />
                 ) : (
                   <div className="chart-empty">
                     {loadingHistory ? (
@@ -568,9 +566,9 @@ export default function Terminal() {
         <aside className="filings-panel panel">
           <div className="panel-heading">
             <div>
-              <span className="section-kicker">02 / SEC EDGAR</span>
+              <span className="section-kicker">02 / {country || "LOCAL"} FILINGS</span>
               <h2>Company reports</h2>
-              <p>{company || name} · official filings</p>
+              <p>{company || name} · {country === "US" ? "U.S. SEC EDGAR" : "official local sources"}</p>
             </div>
             <button
               className="refresh-button"
@@ -580,7 +578,7 @@ export default function Terminal() {
               {loadingFilings ? "…" : "↻"}
             </button>
           </div>
-          <div className="filing-tabs">
+          {country === "US" && <div className="filing-tabs">
             {["10-K", "10-Q", "8-K", "ALL"].map((tab) => (
               <button
                 key={tab}
@@ -590,8 +588,18 @@ export default function Terminal() {
                 {tab}
               </button>
             ))}
-          </div>
-          {filingError ? (
+          </div>}
+          {country !== "US" && !filingError && !loadingFilings ? (
+            <div className="filing-list local-source-list">
+              {reportSources.map((source) => (
+                <article className="filing-item" key={source.name}>
+                  <div className="filing-top"><span className="filing-form">{country || "LOCAL"} SOURCE</span><span>OFFICIAL</span></div>
+                  <p>{source.name}</p>
+                  <div className="filing-bottom"><span>COMPANY REGISTRY / EXCHANGE</span><a href={source.url} target="_blank" rel="noreferrer">SEARCH REPORTS ↗</a></div>
+                </article>
+              ))}
+            </div>
+          ) : filingError ? (
             <div className="filing-empty error-notice">{filingError}</div>
           ) : loadingFilings ? (
             <div className="filing-empty">CONNECTING TO EDGAR…</div>
@@ -630,22 +638,109 @@ export default function Terminal() {
             </div>
           )}
           <div className="edgar-foot">
-            FILINGS PROVIDED BY THE U.S. SEC
+            {country === "US" ? "FILINGS PROVIDED BY THE U.S. SEC" : `REPORT SOURCES · ${country || "COUNTRY NOT IDENTIFIED"}`}
             <br />
             <a
-              href={`https://www.sec.gov/edgar/search/#/q=${encodeURIComponent(symbol)}`}
+              href={reportSources[0]?.url ?? `https://www.sec.gov/edgar/search/#/q=${encodeURIComponent(symbol)}`}
               target="_blank"
               rel="noreferrer"
             >
-              VIEW ALL ON SEC.GOV ↗
+              {country === "US" ? "VIEW ALL ON SEC.GOV ↗" : "OPEN COUNTRY SOURCES ↗"}
             </a>
           </div>
         </aside>
       </section>
+      <section className="company-profile panel" aria-labelledby="profile-title">
+        <div className="profile-heading">
+          <div>
+            <span className="section-kicker">03 / COMPANY PROFILE</span>
+            <h2 id="profile-title">{profile?.profile.name ?? history?.name ?? name}</h2>
+            <p>Business, leadership, growth, and reported ownership information.</p>
+          </div>
+          <div className="profile-heading-actions">
+            <span className="profile-source">PROFILE SOURCE · {profile?.source ?? "YAHOO FINANCE"}</span>
+            <button className="refresh-button" aria-label="Refresh company profile" onClick={() => void loadProfile()} disabled={loadingProfile}>{loadingProfile ? "…" : "↻"}</button>
+          </div>
+        </div>
+        {profileError ? <div className="profile-empty error-notice">{profileError}</div> : loadingProfile && !profile ? <div className="profile-empty">LOADING COMPANY PROFILE…</div> : profile ? (
+          <>
+            <section className="profile-about">
+              <div className="profile-section-title"><span>BUSINESS OVERVIEW</span><small>{profile.profile.sector ?? "Sector not reported"}{profile.profile.industry ? ` · ${profile.profile.industry}` : ""}</small></div>
+              <p className="profile-description">{profile.profile.description ?? "Business description is not available from the current profile source."}</p>
+              <div className="profile-facts">
+                <div className="profile-fact"><span>ESTABLISHED</span><strong>{profile.profile.founded ?? "Not reported"}</strong></div>
+                <div className="profile-fact"><span>EMPLOYEES</span><strong>{profile.profile.employees?.toLocaleString() ?? "Not reported"}</strong></div>
+                <div className="profile-fact"><span>HEADQUARTERS</span><strong>{profile.profile.headquarters ?? "Not reported"}</strong></div>
+                <div className="profile-fact"><span>WEBSITE</span><strong>{profile.profile.website ? <a href={profile.profile.website} target="_blank" rel="noreferrer">OPEN COMPANY SITE ↗</a> : "Not reported"}</strong></div>
+                <div className="profile-fact"><span>MARKET CAPITALIZATION</span><strong>{profile.marketCap != null ? money(profile.marketCap, history?.currency) : "Not reported"}</strong></div>
+              </div>
+            </section>
+            <div className="profile-columns">
+              <section className="profile-section">
+                <div className="profile-section-title"><span>LEADERSHIP</span><small>{profile.profile.officers.length ? `${profile.profile.officers.length} reported officers` : "Not reported"}</small></div>
+                {profile.profile.officers.length ? <div className="profile-list">{profile.profile.officers.map((officer, index) => <div className="profile-person" key={`${officer.name}-${officer.title}-${index}`}><div><strong>{officer.name}</strong><span>{officer.title}</span></div><small>{officer.fiscalYear ? `FY ${officer.fiscalYear}` : ""}</small></div>)}</div> : <p className="profile-muted">Officer details are not available from the current source.</p>}
+              </section>
+              <section className="profile-section">
+                <div className="profile-section-title"><span>GROWTH & FINANCIALS</span><small>{profile.growth.mostRecentQuarter ? `Latest quarter · ${new Date(profile.growth.mostRecentQuarter).toLocaleDateString()}` : "Most recently reported"}</small></div>
+                <div className="growth-grid">
+                  <div className="growth-metric"><span>REVENUE GROWTH</span><strong className={typeof profile.growth.revenueGrowth === "number" ? profile.growth.revenueGrowth >= 0 ? "positive" : "negative" : ""}>{profile.growth.revenueGrowth == null ? "—" : `${(profile.growth.revenueGrowth * 100).toFixed(1)}%`}</strong><small>year over year</small></div>
+                  <div className="growth-metric"><span>EARNINGS GROWTH</span><strong className={typeof profile.growth.earningsGrowth === "number" ? profile.growth.earningsGrowth >= 0 ? "positive" : "negative" : ""}>{profile.growth.earningsGrowth == null ? "—" : `${(profile.growth.earningsGrowth * 100).toFixed(1)}%`}</strong><small>year over year</small></div>
+                  <div className="growth-metric"><span>QUARTERLY EARNINGS GROWTH</span><strong>{profile.growth.quarterlyEarningsGrowth == null ? "—" : `${(profile.growth.quarterlyEarningsGrowth * 100).toFixed(1)}%`}</strong></div>
+                  <div className="growth-metric"><span>REVENUE</span><strong>{profile.growth.revenue == null ? "—" : money(profile.growth.revenue, profile.growth.revenueCurrency ?? "USD")}</strong></div>
+                  <div className="growth-metric"><span>EBITDA</span><strong>{profile.growth.ebitda == null ? "—" : money(profile.growth.ebitda, profile.growth.revenueCurrency ?? "USD")}</strong></div>
+                  <div className="growth-metric"><span>PROFIT MARGIN</span><strong>{profile.growth.profitMargin == null ? "—" : `${(profile.growth.profitMargin * 100).toFixed(1)}%`}</strong></div>
+                </div>
+              </section>
+              <section className="profile-section ownership-section">
+                <div className="profile-section-title"><span>OWNERSHIP & SHAREHOLDERS</span><small>Reported major holders; public data may be delayed</small></div>
+                <div className="ownership-totals">
+                  <div><span>INSIDER OWNERSHIP</span><strong>{profile.ownership.insiderPercent == null ? "—" : `${(profile.ownership.insiderPercent * 100).toFixed(2)}%`}</strong></div>
+                  <div><span>INSTITUTIONAL OWNERSHIP</span><strong>{profile.ownership.institutionPercent == null ? "—" : `${(profile.ownership.institutionPercent * 100).toFixed(2)}%`}</strong></div>
+                  <div><span>INSTITUTIONS</span><strong>{profile.ownership.institutionsCount?.toLocaleString() ?? "—"}</strong></div>
+                  <div><span>SHARES OUTSTANDING</span><strong>{profile.ownership.sharesOutstanding?.toLocaleString() ?? "—"}</strong></div>
+                  <div><span>PUBLIC FLOAT</span><strong>{profile.ownership.floatShares?.toLocaleString() ?? "—"}</strong></div>
+                </div>
+                {profile.ownership.holders.length ? <div className="holder-list"><div className="holder-row holder-header"><span>REPORTED HOLDER</span><span>SHARES</span><span>OWNED</span><span>REPORT DATE</span></div>{profile.ownership.holders.map((holder, index) => <div className="holder-row" key={`${holder.name}-${holder.reportDate}-${index}`}><strong>{holder.name}</strong><span>{holder.shares?.toLocaleString() ?? "—"}</span><span>{holder.percent == null ? "—" : `${(holder.percent * 100).toFixed(2)}%`}</span><span>{holder.reportDate ? new Date(holder.reportDate).toLocaleDateString() : "—"}</span></div>)}</div> : <p className="profile-muted">Major holder details are not reported by the current source.</p>}
+              </section>
+            </div>
+            <p className="profile-disclaimer">Company profile and ownership data are provided by Yahoo Finance and may be incomplete or delayed. Public ownership filings show reportable major holders, not every shareholder. Establishment year is extracted from the company description when stated.</p>
+          </>
+        ) : <div className="profile-empty">No company profile is available for {symbol}.</div>}
+      </section>
+      <section className="company-snapshot panel" aria-labelledby="snapshot-title">
+        <div className="snapshot-heading">
+          <div>
+            <span className="section-kicker">04 / TRADING DATA</span>
+            <h2 id="snapshot-title">{history?.name ?? name}</h2>
+            <p>Selected company and imported market data for {start} through {end}.</p>
+          </div>
+          <span className="snapshot-symbol">{symbol}</span>
+        </div>
+        <div className="snapshot-grid">
+          <div className="snapshot-item"><span>COMPANY</span><strong title={history?.name ?? name}>{history?.name ?? name}</strong></div>
+          <div className="snapshot-item"><span>TICKER</span><strong>{symbol}</strong></div>
+          <div className="snapshot-item"><span>COUNTRY</span><strong>{country || "Not identified"}</strong></div>
+          <div className="snapshot-item"><span>EXCHANGE</span><strong>{history?.exchange || exchange || "—"}</strong></div>
+          <div className="snapshot-item"><span>CURRENCY</span><strong>{history?.currency || "—"}</strong></div>
+          <div className="snapshot-item"><span>PRICE INTERVAL</span><strong>{interval}</strong></div>
+          <div className="snapshot-item"><span>OBSERVATIONS</span><strong>{history?.rows.length.toLocaleString() ?? "—"}</strong></div>
+          <div className="snapshot-item"><span>FIRST CLOSE</span><strong>{money(first, history?.currency)}</strong></div>
+          <div className="snapshot-item"><span>LATEST CLOSE</span><strong>{money(last, history?.currency)}</strong></div>
+          <div className="snapshot-item"><span>PERIOD CHANGE</span><strong className={delta == null ? "" : delta >= 0 ? "positive" : "negative"}>{delta == null ? "—" : `${delta >= 0 ? "+" : "−"}${money(Math.abs(delta), history?.currency)}`}</strong></div>
+          <div className="snapshot-item"><span>CHANGE %</span><strong className={changePercent == null ? "" : changePercent >= 0 ? "positive" : "negative"}>{changePercent == null ? "—" : `${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(2)}%`}</strong></div>
+          <div className="snapshot-item"><span>PERIOD HIGH</span><strong>{money(periodHigh, history?.currency)}</strong></div>
+          <div className="snapshot-item"><span>PERIOD LOW</span><strong>{money(periodLow, history?.currency)}</strong></div>
+          <div className="snapshot-item"><span>LATEST OPEN</span><strong>{money(latestRow?.open, history?.currency)}</strong></div>
+          <div className="snapshot-item"><span>LATEST HIGH</span><strong>{money(latestRow?.high, history?.currency)}</strong></div>
+          <div className="snapshot-item"><span>LATEST LOW</span><strong>{money(latestRow?.low, history?.currency)}</strong></div>
+          <div className="snapshot-item"><span>LATEST VOLUME</span><strong>{latestRow?.volume?.toLocaleString() ?? "—"}</strong></div>
+          <div className="snapshot-item"><span>DATA SOURCE</span><strong>Yahoo Finance</strong></div>
+        </div>
+      </section>
       <footer>
         <span>MARKET/OS RESEARCH TERMINAL</span>
         <span>PRICE HISTORY · YAHOO FINANCE</span>
-        <span>FILINGS · SEC EDGAR</span>
+        <span>REPORTS · COUNTRY-SPECIFIC SOURCES</span>
       </footer>
     </main>
   );

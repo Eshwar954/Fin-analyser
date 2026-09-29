@@ -28,7 +28,17 @@ export async function GET(request: NextRequest) {
     if (!result) return Response.json({ error: payload?.chart?.error?.description ?? `No price history found for ${symbol}.` }, { status: 404 });
     const quote = result.indicators.quote[0];
     const rows = (result.timestamp ?? []).flatMap((time: number, index: number) => quote.close[index] == null ? [] : [{ time: new Date(time * 1000).toISOString(), open: quote.open[index], high: quote.high[index], low: quote.low[index], close: quote.close[index], volume: quote.volume[index] }]);
-    return Response.json({ symbol, currency: result.meta.currency, exchange: result.meta.fullExchangeName ?? result.meta.exchangeName, name: result.meta.longName ?? result.meta.shortName ?? symbol, rows });
+    const exchange = result.meta.fullExchangeName ?? result.meta.exchangeName ?? "";
+    const exchangeKey = exchange.toLowerCase();
+    const currency = result.meta.currency ?? "";
+    const country = currency === "USD" || /nasdaq|new york stock|nyse|bats|cboe/.test(exchangeKey) ? "US"
+      : currency === "INR" || /india|nse|bse/.test(exchangeKey) ? "IN"
+      : currency === "GBP" || /london/.test(exchangeKey) ? "GB"
+      : currency === "CAD" || /toronto|tsx/.test(exchangeKey) ? "CA"
+      : currency === "AUD" || /australia|asx/.test(exchangeKey) ? "AU"
+      : currency === "JPY" || /tokyo/.test(exchangeKey) ? "JP"
+      : currency === "EUR" && /frankfurt|xetra|germany/.test(exchangeKey) ? "DE" : "";
+    return Response.json({ symbol, currency, country, exchange, name: result.meta.longName ?? result.meta.shortName ?? symbol, rows });
   } catch {
     return Response.json({ error: "Could not fetch Yahoo Finance history. Try again shortly." }, { status: 502 });
   }

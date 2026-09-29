@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     if (!response.ok) return Response.json({ error: "Yahoo Finance search is unavailable." }, { status: 502 });
     const data = await response.json();
     const quotes = (data?.quotes ?? []).filter((item: { quoteType?: string; symbol?: string }) => item.quoteType === "EQUITY" && item.symbol);
-    return Response.json({ quotes: quotes.map((item: Record<string, unknown>) => ({ symbol: item.symbol, name: item.shortname ?? item.longname ?? item.symbol, exchange: item.exchDisp ?? item.exchange ?? "" })) });
+    return Response.json({ quotes: quotes.map((item: Record<string, unknown>) => ({ symbol: item.symbol, name: item.shortname ?? item.longname ?? item.symbol, exchange: item.exchDisp ?? item.exchange ?? "", country: item.country ?? "" })) });
   } catch {
     return Response.json({ error: "Could not reach Yahoo Finance. Try again shortly." }, { status: 502 });
   }

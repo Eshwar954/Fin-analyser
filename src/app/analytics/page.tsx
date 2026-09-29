@@ -1,13 +1,12 @@
 import { ViewTransition } from "react";
-import Terminal from "../components/Terminal";
+import AnalyticsClient from "./AnalyticsClient";
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 const first = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] : value;
 
-export default async function Home({ searchParams }: { searchParams: SearchParams }) {
+export default async function AnalyticsPage({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
-  const rawSymbol = first(params.symbol);
-  const symbol = rawSymbol && /^[A-Za-z0-9.^=_-]{1,24}$/.test(rawSymbol) ? rawSymbol.toUpperCase() : "AAPL";
+  const symbol = first(params.symbol);
   const start = first(params.start);
   const end = first(params.end);
   const interval = first(params.interval);
@@ -17,7 +16,7 @@ export default async function Home({ searchParams }: { searchParams: SearchParam
       exit={{ "nav-forward": "nav-forward", "nav-back": "nav-back", default: "none" }}
       default="none"
     >
-      <Terminal initialSymbol={symbol} initialStart={start} initialEnd={end} initialInterval={interval} />
+      <AnalyticsClient initialSymbol={symbol && /^[A-Za-z0-9.^=_-]{1,24}$/.test(symbol) ? symbol : "AAPL"} initialStart={start} initialEnd={end} initialInterval={interval} />
     </ViewTransition>
   );
 }
