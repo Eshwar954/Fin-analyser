@@ -85,6 +85,8 @@ export default function AnalyticsClient({ initialSymbol, initialStart, initialEn
         <nav className="site-nav" aria-label="Main navigation">
           <Link className="nav-link" href={`/?${query}`} transitionTypes={["nav-back"]}>TERMINAL</Link>
           <Link className="nav-link active" href={`/analytics?${query}`} transitionTypes={["nav-forward"]} aria-current="page">ANALYTICS</Link>
+          <Link className="nav-link" href={`/news?${new URLSearchParams({ symbol, company: history?.name ?? symbol, country: history?.country ?? "US", start, end, interval }).toString()}`} transitionTypes={["nav-forward"]}>NEWS</Link>
+          <Link className="nav-link" href={`/compare?symbols=${encodeURIComponent(symbol)}&start=${start}&end=${end}&interval=${interval}`} transitionTypes={["nav-forward"]}>COMPARE</Link>
         </nav>
         <div className="market-status"><span className="status-dot" />SECURITY ANALYSIS <span className="status-time">HISTORICAL MARKET DATA</span></div>
       </header>

@@ -292,6 +292,8 @@ export default function Terminal({ initialSymbol = "AAPL", initialStart, initial
         <nav className="site-nav" aria-label="Main navigation">
           <Link className="nav-link active" href={`/?${new URLSearchParams({ symbol, start, end, interval }).toString()}`} aria-current="page">TERMINAL</Link>
           <Link className="nav-link" href={`/analytics?${new URLSearchParams({ symbol, start, end, interval }).toString()}`} transitionTypes={["nav-forward"]}>ANALYTICS</Link>
+          <Link className="nav-link" href={`/news?${new URLSearchParams({ symbol, company: name, country, start, end, interval }).toString()}`} transitionTypes={["nav-forward"]}>NEWS</Link>
+          <Link className="nav-link" href={`/compare?symbols=${encodeURIComponent(symbol)}&start=${start}&end=${end}&interval=${interval}`} transitionTypes={["nav-forward"]}>COMPARE</Link>
         </nav>
         <div className="top-actions">
           <span className="top-action">
